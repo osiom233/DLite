@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -37,7 +38,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/request", handleRequest)
 	mux.HandleFunc("/download", handleDownload)
 	mux.HandleFunc("/direct", handleDirect)
@@ -52,11 +52,11 @@ func main() {
 // 申请 token
 func handleRequest(w http.ResponseWriter, r *http.Request) {
 	fileParam := r.URL.Query().Get("file")
-	if fileParam == "" {
-		respondJSON(w, Response{Success: false, Message: "参数 file 缺失"})
+	path, err := PathHelper(fileParam)
+	if err != nil {
+		respondJSON(w, Response{Success: false, Message: err.Error()})
 		return
 	}
-	path := strings.ReplaceAll(fileParam, ".", "/")
 	token := time.Now().Format("20060102150405") + "_" + RandString(6)
 	expire := time.Now().Add(5 * time.Minute)
 
@@ -70,7 +70,10 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // 下载文件
 func handleDownload(w http.ResponseWriter, r *http.Request) {
-	DeleteExpiredTokens(db)
+	err := DeleteExpiredTokens(db)
+	if err != nil {
+		return
+	}
 
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -134,7 +137,12 @@ func sendFile(w http.ResponseWriter, path string) {
 		respondJSON(w, Response{Success: false, Message: "找不到文件"})
 		return
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+
+		}
+	}(file)
 
 	w.Header().Set("Content-Disposition", "attachment; filename="+getFileName(path))
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -146,7 +154,7 @@ func respondJSON(w http.ResponseWriter, resp Response) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// 生成随机字符串（用于 token）
+// RandString 生成随机字符串（用于 token）
 func RandString(n int) string {
 	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 	b := make([]rune, n)
@@ -155,4 +163,11 @@ func RandString(n int) string {
 		time.Sleep(time.Nanosecond) // 避免重复
 	}
 	return string(b)
+}
+
+func PathHelper(path string) (string, error) {
+	if path == "" || strings.Contains(path, "..") {
+		return "", errors.New("illegal request")
+	}
+	return path, nil
 }
